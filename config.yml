@@ -1,0 +1,69 @@
+﻿project:
+  name: anki-es-5k-multilingual
+
+paths:
+  data_raw: data_raw
+  data_intermediate: data_intermediate
+  build: build
+  deck_db: deck.sqlite
+
+sources:
+  subtlex_es:
+    path: data_raw/subtlex_es/subtlex_es.tsv
+  wiktionary_dump:
+    path: data_raw/wiktionary_dump/eswiktionary-latest-pages-articles.xml.bz2
+  dictionaries:
+    es_fr: data_raw/dictionaries/es-fr
+    es_de: data_raw/dictionaries/es-de
+    es_en: data_raw/dictionaries/es-en
+    en_ta: data_raw/dictionaries/en-ta
+  examples:
+    path: data_raw/examples
+
+outputs:
+  lemmas_tsv: data_intermediate/01_lemmas.tsv
+  ipa_tsv: data_intermediate/02_ipa.tsv
+  wikt_meta_tsv: data_intermediate/02_wikt_meta.tsv
+  examples_tsv: data_intermediate/03_examples.tsv
+  es_fr_tsv: data_intermediate/04_es_fr.tsv
+  es_de_tsv: data_intermediate/04_es_de.tsv
+  wikt_fr_de_tsv: data_intermediate/04_wikt_fr_de.tsv
+  es_ta_tsv: data_intermediate/05_es_ta.tsv
+  es_en_tsv: data_intermediate/05_es_en.tsv
+  en_ta_tsv: data_intermediate/05_en_ta.tsv
+  es_ta_pivoted_tsv: data_intermediate/05_es_ta_pivoted.tsv
+  deck_csv: build/deck_es_5k_multilingual.csv
+  qa_report_html: build/qa_report.html
+  missing_fields_tsv: build/missing_fields.tsv
+  sense_conflicts_tsv: build/sense_conflicts.tsv
+  build_info_json: build/build_info.json
+
+normalization:
+  strip_trailing_markers:
+    - "(m)"
+    - "(f)"
+    - "(pl)"
+    - "(v)"
+    - "(adj)"
+
+examples:
+  max_words: 15
+  max_per_lemma: 1
+  avoid_proper_names: true
+
+scoring:
+  primary_dict_weight: 2
+  wiktionary_weight: 1
+  multi_source_bonus: 1
+  archaic_penalty: -1
+  long_penalty: -1
+  long_threshold: 25
+  ta_pivot_penalty: -1
+
+qa:
+  ipa_coverage_min: 0.85
+  fr_de_coverage_min: 0.9
+  ta_coverage_min: 0.7
+  example_coverage_min: 0.7
+  spot_check_count: 200
+  pilot_count: 100

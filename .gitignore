@@ -1,0 +1,11 @@
+﻿# Outputs
+/data_raw/
+/data_intermediate/
+/build/
+/deck.sqlite
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.env

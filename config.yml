@@ -16,7 +16,7 @@ wiktionary:
   # Path to the Spanish Wiktionary dump in JSON or JSON Lines format.  A
   # file produced by wiktextract is recommended.  Use .bz2 or .gz
   # extension if the file is compressed.
-  dump_path: data_raw/wiktionary_dump/wiktionary.json
+  dump_path: data_raw/wiktionary_dump/es-extract.jsonl.gz
   # Output TSV containing es_norm → IPA entries
   ipa_tsv: data_intermediate/02_ipa.tsv
   # Output TSV containing revision metadata (es_norm → page_id, revision_id, timestamp)

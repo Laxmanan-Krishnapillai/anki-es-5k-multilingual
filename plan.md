@@ -318,7 +318,7 @@ anki-es-5k-multilingual/
 * **M2:** Wiktionary IPA extraction working
 * **M3:** es–fr + es–de dictionaries parsed & merged
 * **M4:** Tamil direct + pivot pipeline working with provenance tags
-* **M5:** Curated examples integrated + selection heuristics stable
+* **M5:** Curated examples integra  ted + selection heuristics stable
 * **M6:** QA gates pass + AnkiMobile pilot import
 * **M7:** Full 5k export + documentation
 

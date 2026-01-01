@@ -1,69 +1,25 @@
-﻿project:
-  name: anki-es-5k-multilingual
+subtlex:
+  # Path to the raw SUBTLEX‑ES dataset.  This file should contain
+  # at least the following columns: lemma (or word), part‑of‑speech (pos),
+  # rank (1–N) and Zipf frequency.  The script will attempt to auto‑detect
+  # column names if they differ slightly (e.g. `Lemma`, `Word`, etc.).
+  filepath: data_raw/subtlex_es/subtlex_es.tsv
+  # Delimiter used in the raw SUBTLEX dataset.  The standard SUBTLEX
+  # release uses a tab delimiter.  Override if your file uses a different
+  # delimiter (e.g. "," for CSV).
+  delimiter: "\t"
+  # How many lemmas to keep.  M1 freezes the top 5,000 lemmas by rank.
+  top_n: 5000
 
-paths:
-  data_raw: data_raw
-  data_intermediate: data_intermediate
-  build: build
-  deck_db: deck.sqlite
-
-sources:
-  subtlex_es:
-    path: data_raw/subtlex_es/subtlex_es.tsv
-  wiktionary_dump:
-    path: data_raw/wiktionary_dump/eswiktionary-latest-pages-articles.xml.bz2
-  dictionaries:
-    es_fr: data_raw/dictionaries/es-fr
-    es_de: data_raw/dictionaries/es-de
-    es_en: data_raw/dictionaries/es-en
-    en_ta: data_raw/dictionaries/en-ta
-  examples:
-    path: data_raw/examples
-
-outputs:
-  lemmas_tsv: data_intermediate/01_lemmas.tsv
+# Settings for Wiktionary parsing (Phase M2)
+wiktionary:
+  # Path to the Spanish Wiktionary dump in JSON or JSON Lines format.  A
+  # file produced by wiktextract is recommended.  Use .bz2 or .gz
+  # extension if the file is compressed.
+  dump_path: data_raw/wiktionary_dump/wiktionary.json
+  # Output TSV containing es_norm → IPA entries
   ipa_tsv: data_intermediate/02_ipa.tsv
-  wikt_meta_tsv: data_intermediate/02_wikt_meta.tsv
-  examples_tsv: data_intermediate/03_examples.tsv
-  es_fr_tsv: data_intermediate/04_es_fr.tsv
-  es_de_tsv: data_intermediate/04_es_de.tsv
-  wikt_fr_de_tsv: data_intermediate/04_wikt_fr_de.tsv
-  es_ta_tsv: data_intermediate/05_es_ta.tsv
-  es_en_tsv: data_intermediate/05_es_en.tsv
-  en_ta_tsv: data_intermediate/05_en_ta.tsv
-  es_ta_pivoted_tsv: data_intermediate/05_es_ta_pivoted.tsv
-  deck_csv: build/deck_es_5k_multilingual.csv
-  qa_report_html: build/qa_report.html
-  missing_fields_tsv: build/missing_fields.tsv
-  sense_conflicts_tsv: build/sense_conflicts.tsv
-  build_info_json: build/build_info.json
-
-normalization:
-  strip_trailing_markers:
-    - "(m)"
-    - "(f)"
-    - "(pl)"
-    - "(v)"
-    - "(adj)"
-
-examples:
-  max_words: 15
-  max_per_lemma: 1
-  avoid_proper_names: true
-
-scoring:
-  primary_dict_weight: 2
-  wiktionary_weight: 1
-  multi_source_bonus: 1
-  archaic_penalty: -1
-  long_penalty: -1
-  long_threshold: 25
-  ta_pivot_penalty: -1
-
-qa:
-  ipa_coverage_min: 0.85
-  fr_de_coverage_min: 0.9
-  ta_coverage_min: 0.7
-  example_coverage_min: 0.7
-  spot_check_count: 200
-  pilot_count: 100
+  # Output TSV containing revision metadata (es_norm → page_id, revision_id, timestamp)
+  meta_tsv: data_intermediate/02_wikt_meta.tsv
+  # Path to the lemma list generated in M1
+  lemma_tsv: data_intermediate/01_lemmas.tsv

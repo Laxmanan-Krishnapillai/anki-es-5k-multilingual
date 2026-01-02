@@ -66,6 +66,8 @@ import csv
 import json
 import logging
 import xml.etree.ElementTree as ET
+import itertools
+import re
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -182,6 +184,222 @@ def read_tei_xml(dict_path: Path) -> Optional[str]:
 
     xml_text = "".join(open_text(dict_path))
     return xml_text
+
+
+OPEN_CORPUS_SPLIT_RE = re.compile(r"\s*[;,/]\s*")
+
+
+def split_open_corpus_translations(text: str) -> List[str]:
+    if not text:
+        return []
+    text = text.strip()
+    if not text:
+        return []
+    parts = OPEN_CORPUS_SPLIT_RE.split(text)
+    cleaned: List[str] = []
+    for part in parts:
+        part = part.strip().strip(".")
+        if part:
+            cleaned.append(part)
+    return cleaned
+
+
+def expand_english_variants(text: str) -> List[str]:
+    cleaned = text.strip()
+    if not cleaned:
+        return []
+    variants = {cleaned}
+    lowered = cleaned.lower()
+    if lowered.startswith("to "):
+        stripped = cleaned[3:].strip()
+        if stripped:
+            variants.add(stripped)
+    return sorted(variants)
+
+
+def clean_open_corpus_gloss(text: Optional[str]) -> str:
+    if not text:
+        return ""
+    cleaned = text.strip()
+    if cleaned.startswith("{") and cleaned.endswith("}"):
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
+
+
+def parse_open_corpus_es_en(
+    dict_path: Path,
+    *,
+    normalize: Optional[Callable[[str], str]] = None,
+    lemma_set: Optional[Set[str]] = None,
+) -> Dict[str, List[Tuple[str, Optional[str]]]]:
+    """Parse Open Corpus es-en XML and return a mapping of source lemmas
+    to lists of ``(translation, gloss)`` tuples.
+
+    The Open Corpus format uses ``<c>`` for the Spanish headword and
+    ``<d>`` for the English translation string. Multiple translations are
+    split on commas/semicolons/slashes. Verb translations prefixed with
+    ``to`` are expanded to include a variant without ``to`` to improve
+    matching against English headword dictionaries.
+    """
+    if not dict_path.exists():
+        return {}
+    results: Dict[str, List[Tuple[str, Optional[str]]]] = {}
+    normalizer = normalize or normalize_es
+    try:
+        for _event, elem in ET.iterparse(dict_path, events=("end",)):
+            if elem.tag != "w":
+                continue
+            src = elem.findtext("c")
+            dst = elem.findtext("d")
+            tag = elem.findtext("t")
+            if not src or not dst:
+                elem.clear()
+                continue
+            es_norm = normalizer(src)
+            if lemma_set is not None and es_norm not in lemma_set:
+                elem.clear()
+                continue
+            gloss = clean_open_corpus_gloss(tag)
+            translations: List[str] = []
+            for part in split_open_corpus_translations(dst):
+                translations.extend(expand_english_variants(part))
+            if translations:
+                bucket = results.setdefault(es_norm, [])
+                for trans in translations:
+                    bucket.append((trans, gloss or None))
+            elem.clear()
+    except Exception as e:
+        logging.warning("Failed to parse Open Corpus dictionary %s: %s", dict_path, e)
+        return {}
+    return results
+
+
+def parse_apertium_fra_spa_tsv(
+    dict_path: Path,
+    *,
+    normalize: Optional[Callable[[str], str]] = None,
+    lemma_set: Optional[Set[str]] = None,
+) -> Dict[str, List[Tuple[str, Optional[str]]]]:
+    """Parse Apertium fra-spa TSV and return a mapping of Spanish lemmas
+    to lists of ``(French, gloss)`` tuples.
+
+    The TSV is expected to have at least ``French`` and ``Spanish`` columns.
+    This file is French->Spanish, so we invert it to Spanish->French.
+    """
+    results: Dict[str, List[Tuple[str, Optional[str]]]] = {}
+    if not dict_path.exists():
+        return results
+    normalizer = normalize or normalize_es
+    try:
+        with dict_path.open("r", encoding="utf-8", errors="replace") as f:
+            header = ""
+            for line in f:
+                if line.strip():
+                    header = line.lstrip("\ufeff")
+                    break
+            if not header:
+                return results
+            reader = csv.DictReader(
+                itertools.chain([header], f),
+                delimiter="\t",
+            )
+            if not reader.fieldnames:
+                return results
+            field_map = {name.strip().lower(): name for name in reader.fieldnames if name}
+            fr_col = field_map.get("french") or field_map.get("fr")
+            es_col = field_map.get("spanish") or field_map.get("es")
+            if fr_col is None or es_col is None:
+                logging.warning("Apertium TSV missing French/Spanish columns: %s", dict_path)
+                return results
+            for row in reader:
+                fr_word = (row.get(fr_col) or "").strip()
+                es_word = (row.get(es_col) or "").strip()
+                if not fr_word or not es_word:
+                    continue
+                es_norm = normalizer(es_word)
+                if lemma_set is not None and es_norm not in lemma_set:
+                    continue
+                results.setdefault(es_norm, []).append((fr_word, None))
+    except Exception as e:
+        logging.warning("Failed to parse Apertium TSV %s: %s", dict_path, e)
+        return {}
+    return results
+
+
+def parse_ding_es_de_tsv(
+    dict_path: Path,
+    *,
+    normalize: Optional[Callable[[str], str]] = None,
+    lemma_set: Optional[Set[str]] = None,
+) -> Dict[str, List[Tuple[str, Optional[str]]]]:
+    """Parse Ding es-de TSV and return a mapping of Spanish lemmas
+    to lists of ``(German, gloss)`` tuples."""
+    results: Dict[str, List[Tuple[str, Optional[str]]]] = {}
+    if not dict_path.exists():
+        return results
+    normalizer = normalize or normalize_es
+    es_split_re = re.compile(r"\s*[;/]\s*")
+    es_comma_re = re.compile(r"\s*,\s*")
+    es_paren_re = re.compile(r"\s*\([^)]*\)")
+    try:
+        with dict_path.open("r", encoding="utf-8", errors="replace") as f:
+            header = ""
+            for line in f:
+                if line.strip():
+                    header = line.lstrip("\ufeff")
+                    break
+            if not header:
+                return results
+            reader = csv.DictReader(
+                itertools.chain([header], f),
+                delimiter="\t",
+            )
+            if not reader.fieldnames:
+                return results
+            field_map = {name.strip().lower(): name for name in reader.fieldnames if name}
+            es_col = field_map.get("spanish") or field_map.get("es")
+            de_col = field_map.get("german") or field_map.get("de")
+            if es_col is None or de_col is None:
+                logging.warning("Ding TSV missing Spanish/German columns: %s", dict_path)
+                return results
+            for row in reader:
+                es_word_raw = (row.get(es_col) or "").strip()
+                de_word = (row.get(de_col) or "").strip()
+                if not es_word_raw or not de_word:
+                    continue
+                es_word_raw = es_paren_re.sub("", es_word_raw).strip()
+                variants = es_split_re.split(es_word_raw) if es_word_raw else []
+                for es_group in variants:
+                    es_group = es_group.strip()
+                    if not es_group:
+                        continue
+                    comma_alts = [alt for alt in es_comma_re.split(es_group) if alt]
+                    if not comma_alts:
+                        continue
+                    selected_alt = None
+                    selected_norm = ""
+                    if lemma_set is not None:
+                        for alt in comma_alts:
+                            alt = alt.strip()
+                            if not alt:
+                                continue
+                            es_norm = normalizer(alt)
+                            if es_norm in lemma_set:
+                                selected_alt = alt
+                                selected_norm = es_norm
+                                break
+                        if selected_alt is None:
+                            continue
+                    else:
+                        selected_alt = comma_alts[0].strip()
+                        if not selected_alt:
+                            continue
+                        selected_norm = normalizer(selected_alt)
+                    results.setdefault(selected_norm, []).append((de_word, None))
+    except Exception as e:
+        logging.warning("Failed to parse Ding TSV %s: %s", dict_path, e)
+        return {}
+    return results
 
 
 def parse_freedict_tei(
@@ -450,6 +668,31 @@ def find_freedict_path(config_path: Path, source_lang: str, target_lang: str) ->
     return dict_dir / f"{source_lang}-{target_lang}.tei"
 
 
+def find_open_corpus_paths(config_path: Path) -> List[Path]:
+    dict_dir = resolve_path(config_path, "data_raw/dictionaries/open-corpus-es-en")
+    candidates = [
+        dict_dir / "es-en.xml",
+        dict_dir / "verbs" / "es-en.xml",
+    ]
+    return [path for path in candidates if path.exists()]
+
+
+def find_apertium_fra_spa_path(config_path: Path, dict_cfg: Dict[str, object]) -> Path:
+    for key in ("apertium_fra_spa", "apertium_fr_spa", "apertium_fr"):
+        path_val = dict_cfg.get(key)
+        if path_val is not None:
+            return resolve_path(config_path, str(path_val))
+    return resolve_path(config_path, "data_raw/dictionaries/apertium_fra_spa.tsv")
+
+
+def find_ding_es_de_path(config_path: Path, dict_cfg: Dict[str, object]) -> Path:
+    for key in ("ding_es_de", "ding_de_es", "ding"):
+        path_val = dict_cfg.get(key)
+        if path_val is not None:
+            return resolve_path(config_path, str(path_val))
+    return resolve_path(config_path, "data_raw/dictionaries/ding_es_de_spa2ger.tsv")
+
+
 def normalise_generic(text: str) -> str:
     """Simplistic normalisation for non‑Spanish words.
 
@@ -580,7 +823,31 @@ def parse_dictionaries(cfg: dict, config_path: Path) -> None:
     )
     ta_trans = build_translation_map(en_ta_dict, "en", "ta", normalize=normalise_generic)
 
-    # Extract Wiktionary translations for FR/DE if wiktionary dump provided
+    apertium_path = find_apertium_fra_spa_path(config_path, dict_cfg)
+    apertium_trans = parse_apertium_fra_spa_tsv(
+        apertium_path, normalize=normalize_spanish, lemma_set=lemma_set
+    )
+    if apertium_trans:
+        logging.info("Loaded Apertium FR-ES entries from %s", apertium_path)
+    else:
+        if apertium_path.exists():
+            logging.warning("Apertium FR-ES TSV parsed but produced no rows: %s", apertium_path)
+        else:
+            logging.warning("Apertium FR-ES TSV not found at %s", apertium_path)
+
+    ding_path = find_ding_es_de_path(config_path, dict_cfg)
+    ding_trans = parse_ding_es_de_tsv(
+        ding_path, normalize=normalize_spanish, lemma_set=lemma_set
+    )
+    if ding_trans:
+        logging.info("Loaded Ding ES-DE entries from %s", ding_path)
+    else:
+        if ding_path.exists():
+            logging.warning("Ding ES-DE TSV parsed but produced no rows: %s", ding_path)
+        else:
+            logging.warning("Ding ES-DE TSV not found at %s", ding_path)
+
+    # Extract Wiktionary translations for FR/DE/EN if wiktionary dump provided
     wikt_cfg = cfg.get("wiktionary", {}) if isinstance(cfg.get("wiktionary"), dict) else {}
     wikt_dump_path_val = wikt_cfg.get("dump_path")
     wikt_dump_path = (
@@ -591,7 +858,10 @@ def parse_dictionaries(cfg: dict, config_path: Path) -> None:
     wikt_translations: Dict[str, Dict[str, List[Tuple[str, Optional[str]]]]] = {}
     if wikt_dump_path and wikt_dump_path.exists():
         wikt_translations = parse_wiktionary_translations(
-            wikt_dump_path, lemma_set, languages={"fr", "de"}, normalize=normalize_spanish
+            wikt_dump_path,
+            lemma_set,
+            languages={"fr", "de", "en"},
+            normalize=normalize_spanish,
         )
     else:
         if wikt_dump_path:
@@ -599,7 +869,7 @@ def parse_dictionaries(cfg: dict, config_path: Path) -> None:
 
     # Merge FreeDict and Wiktionary translations; record sources
     def merge_translations(
-        primary: Dict[str, List[Tuple[str, Optional[str]]]],
+        primary_sources: List[Tuple[str, Dict[str, List[Tuple[str, Optional[str]]]]]],
         secondary: Dict[str, Dict[str, List[Tuple[str, Optional[str]]]]],
         target_lang: str,
     ) -> List[Tuple[str, str, str, str]]:
@@ -608,12 +878,13 @@ def parse_dictionaries(cfg: dict, config_path: Path) -> None:
             # gather candidate translations
             mapping: Dict[Tuple[str, str], Set[str]] = {}  # (translation, gloss) -> sources
             # primary
-            for trans, gloss in primary.get(es_norm, []):
-                t = trans.strip()
-                if not t:
-                    continue
-                g = (gloss or "").strip()
-                mapping.setdefault((t, g), set()).add("freedict")
+            for source_name, primary in primary_sources:
+                for trans, gloss in primary.get(es_norm, []):
+                    t = trans.strip()
+                    if not t:
+                        continue
+                    g = (gloss or "").strip()
+                    mapping.setdefault((t, g), set()).add(source_name)
             # secondary (wiktionary)
             sec_lang_map = secondary.get(es_norm, {}).get(target_lang)
             if sec_lang_map:
@@ -629,18 +900,44 @@ def parse_dictionaries(cfg: dict, config_path: Path) -> None:
                 rows.append((es_norm, trans_text, source_str, gloss_text))
         return rows
 
-    es_fr_rows = merge_translations(fr_trans, wikt_translations, "fr")
-    es_de_rows = merge_translations(de_trans, wikt_translations, "de")
+    es_fr_rows = merge_translations(
+        [("freedict", fr_trans), ("apertium", apertium_trans)],
+        wikt_translations,
+        "fr",
+    )
+    es_de_rows = merge_translations(
+        [("freedict", de_trans), ("ding", ding_trans)],
+        wikt_translations,
+        "de",
+    )
 
     # For es→en and en→ta dictionaries we do not have Wiktionary fallback
-    es_en_rows: List[Tuple[str, str, str, str]] = []
-    for es_norm in sorted(lemma_set):
-        translations = en_trans.get(es_norm, [])
-        for trans, gloss in translations:
-            t = trans.strip()
-            if not t:
+    # Open Corpus ES->EN dictionary
+    open_corpus_paths = find_open_corpus_paths(config_path)
+    open_corpus_trans: Dict[str, List[Tuple[str, Optional[str]]]] = {}
+    if open_corpus_paths:
+        for path in open_corpus_paths:
+            parsed = parse_open_corpus_es_en(
+                path, normalize=normalize_spanish, lemma_set=lemma_set
+            )
+            if not parsed:
                 continue
-            es_en_rows.append((es_norm, t, "freedict", gloss or ""))
+            for es_norm, entries in parsed.items():
+                open_corpus_trans.setdefault(es_norm, []).extend(entries)
+        logging.info(
+            "Loaded Open Corpus ES->EN entries from %d file(s)",
+            len(open_corpus_paths),
+        )
+    else:
+        logging.warning(
+            "Open Corpus ES->EN dictionary not found under data_raw/dictionaries/open-corpus-es-en"
+        )
+
+    es_en_rows = merge_translations(
+        [("freedict", en_trans), ("open_corpus", open_corpus_trans)],
+        wikt_translations,
+        "en",
+    )
 
     en_ta_rows: List[Tuple[str, str, str, str]] = []
     # For en→ta we cannot restrict by Spanish lemmas; include all entries

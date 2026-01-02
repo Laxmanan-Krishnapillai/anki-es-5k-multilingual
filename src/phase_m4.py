@@ -227,6 +227,82 @@ def normalize_generic(text: str) -> str:
     return text
 
 
+EN_HEADWORD_SPLIT_RE = re.compile(r"\s*[,;/]\s*")
+EN_PAREN_RE = re.compile(r"\s*\([^)]*\)")
+EN_POS_MARKERS = {
+    "n",
+    "v",
+    "adj",
+    "adv",
+    "pron",
+    "prep",
+    "conj",
+    "interj",
+    "pl",
+    "vt",
+    "vi",
+}
+
+
+def split_english_headwords(text: str) -> List[str]:
+    if not text:
+        return []
+    text = text.strip().strip('"').strip("'")
+    if not text:
+        return []
+    parts = EN_HEADWORD_SPLIT_RE.split(text)
+    cleaned: List[str] = []
+    for part in parts:
+        part = part.strip().strip('"').strip("'")
+        if not part:
+            continue
+        part = EN_PAREN_RE.sub("", part).strip()
+        part = part.strip(" .;,:")
+        part = re.sub(r"\s+", " ", part)
+        if not part:
+            continue
+        marker = part.lower().strip(".")
+        if marker in EN_POS_MARKERS:
+            continue
+        cleaned.append(part)
+    return cleaned or [text]
+
+
+EN_SLASH_SPLIT_RE = re.compile(r"\s*/\s*")
+
+
+def expand_english_variants_for_pivot(text: str) -> List[str]:
+    if not text:
+        return []
+    base = text.strip()
+    if not base:
+        return []
+    variants = {base}
+    no_paren = EN_PAREN_RE.sub("", base).strip()
+    if no_paren:
+        variants.add(no_paren)
+    expanded: Set[str] = set()
+    for variant in variants:
+        if "/" in variant:
+            for part in EN_SLASH_SPLIT_RE.split(variant):
+                part = part.strip()
+                if part:
+                    expanded.add(part)
+        expanded.add(variant)
+    cleaned: Set[str] = set()
+    for variant in expanded:
+        cleaned_variant = variant.strip(" .;,:")
+        if not cleaned_variant:
+            continue
+        cleaned.add(cleaned_variant)
+        lower = cleaned_variant.lower()
+        if lower.startswith("to "):
+            stripped = cleaned_variant[3:].strip()
+            if stripped and " " not in stripped:
+                cleaned.add(stripped)
+    return sorted(cleaned)
+
+
 def normalize_language_tag(value: object) -> str:
     if value is None:
         return ""
@@ -422,7 +498,10 @@ def read_tamil_dictionary_tsv(path: Path) -> List[Tuple[str, str]]:
                 tgt = row.get(tgt_col)
                 if not src or not tgt:
                     continue
-                rows.append((src.strip(), tgt.strip()))
+                for headword in split_english_headwords(src):
+                    if not headword:
+                        continue
+                    rows.append((headword.strip(), tgt.strip()))
     except FileNotFoundError:
         logging.warning("Tamil dictionary TSV not found: %s", path)
     return rows
@@ -444,9 +523,15 @@ def read_tamil_dictionary_json(path: Path) -> List[Tuple[str, str]]:
             if isinstance(value, list):
                 for item in value:
                     if isinstance(item, str):
-                        rows.append((str(eng).strip(), item.strip()))
+                        for headword in split_english_headwords(str(eng)):
+                            if not headword:
+                                continue
+                            rows.append((headword.strip(), item.strip()))
             elif isinstance(value, str):
-                rows.append((str(eng).strip(), value.strip()))
+                for headword in split_english_headwords(str(eng)):
+                    if not headword:
+                        continue
+                    rows.append((headword.strip(), value.strip()))
         return rows
     if isinstance(data, list):
         for item in data:
@@ -455,7 +540,10 @@ def read_tamil_dictionary_json(path: Path) -> List[Tuple[str, str]]:
             eng = item.get("eng") or item.get("english")
             tamil = item.get("tamil")
             if isinstance(eng, str) and isinstance(tamil, str):
-                rows.append((eng.strip(), tamil.strip()))
+                for headword in split_english_headwords(eng):
+                    if not headword:
+                        continue
+                    rows.append((headword.strip(), tamil.strip()))
         return rows
     logging.warning("Unexpected Tamil dictionary JSON format: %s", path)
     return rows
@@ -602,7 +690,8 @@ def build_pivot_es_ta(
     for es_norm, en_word, en_source, en_gloss in es_en_rows:
         if es_norm not in lemma_set:
             continue
-        es_en_map.setdefault(es_norm, []).append((en_word, en_gloss or "", en_source))
+        for variant in expand_english_variants_for_pivot(en_word):
+            es_en_map.setdefault(es_norm, []).append((variant, en_gloss or "", en_source))
     # Build mapping: en_norm -> list of (ta_text, ta_gloss, ta_source)
     en_ta_map: Dict[str, List[Tuple[str, str, str]]] = {}
     for en_norm, ta_word, ta_source, ta_gloss in en_ta_rows:
